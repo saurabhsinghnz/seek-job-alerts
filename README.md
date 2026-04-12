@@ -14,84 +14,52 @@ Automated Python bot that monitors Seek.com.au for new TypeScript IT jobs (remot
 ## Prerequisites
 
 - Python 3.8+
-- Telegram Bot Token (from [@BotFather](https://t.me/botfather))
-- Telegram Chat ID (your personal chat ID with the bot)
+- Telegram Bot and Chat ID (see [TELEGRAM_SETUP.md](TELEGRAM_SETUP.md))
 
-## Setup Instructions
+## Quick Setup
 
 ### 1. Clone or Download the Project
 
-```bash
-cd /Users/saurabhsingh/Workspace/Source/Personal/seek-job-alert
-```
-
-### 2. Create Virtual Environment
+### 2. Create Virtual Environment & Install Dependencies
 
 ```bash
 python3 -m venv venv
 source venv/bin/activate  # On macOS/Linux
-# or
-venv\Scripts\activate  # On Windows
-```
-
-### 3. Install Dependencies
-
-```bash
 pip install -r requirements.txt
 ```
 
-### 4. Get Telegram Credentials
+### 3. Get Telegram Credentials
 
-**4a. Create a Telegram Bot:**
+See **[TELEGRAM_SETUP.md](TELEGRAM_SETUP.md)** for detailed instructions on:
 
-1. Open Telegram and search for [@BotFather](https://t.me/botfather)
-2. Send `/start` then `/newbot`
-3. Follow the prompts to create your bot
-4. Copy the **Bot Token** (looks like: `123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11`)
+- Creating a Telegram bot with @BotFather
+- Getting your Chat ID from @userinfobot
+- Starting a conversation with your bot (important!)
 
-**4b. Get Your Chat ID:**
+### 4. Configure Environment
 
-1. Open Telegram and search for [@userinfobot](https://t.me/userinfobot)
-2. Send any message and it will reply with your **User ID**
-
-**4c. ⚠️ IMPORTANT - Start Conversation with Your Bot:**
-
-This is required for Telegram to allow the bot to send you messages:
-
-1. Search for your bot by username (the name you created in step 4a)
-2. **Click "Start"** to initiate the conversation
-3. Done! The bot now has permission to message you
-
-Create a `.env` file in the project root (use KEY=VALUE format):
+Create a `.env` file in the project root:
 
 ```bash
-# Copy this template to .env (no `export` keywords)
 SEEK_TELEGRAM_TOKEN=your_bot_token_here
 SEEK_CHAT_ID=your_chat_id_here
 SEEK_CHECK_INTERVAL=10  # Optional, defaults to 10 minutes
 ```
 
-Or set them directly in your terminal for a single session:
+Or set them directly in your terminal for a single run:
 
 ```bash
 export SEEK_TELEGRAM_TOKEN="your_bot_token_here"
 export SEEK_CHAT_ID="your_chat_id_here"
 ```
 
-### 6. Run the Bot
+### 5. Run the Bot
 
 ```bash
-python seek_job_alert.py
-```
-
-If you prefer to use the helper script `./run.sh`, note that it reads the `.env` file but does not activate the project's virtual environment. Activate the venv first, for example:
-
-```bash
-source venv/bin/activate
 ./run.sh
 ```
 
-You should see:
+Expected output:
 
 ```
 2026-04-11 10:00:00,000 - __main__ - INFO - Scheduler is running. Press Ctrl+C to exit.
@@ -107,22 +75,13 @@ You should see:
 
 ## Troubleshooting
 
-### Error: "Forbidden: bot can't initiate conversation with a user"
-
-**Solution:** You haven't started a conversation with the bot yet!
-
-1. Open Telegram
-2. Search for your bot by name
-3. Click **Start**
-4. Then run the job alert bot again
-
 ### Bot not sending messages?
 
-- Verify Telegram token is correct
-- Check Chat ID is correct
-- Make sure you clicked **Start** on your bot (see error above)
-- Check `job_alert.log` for detailed errors
-- Check firewall/VPN isn't blocking Telegram API
+See the **[TELEGRAM_SETUP.md](TELEGRAM_SETUP.md#troubleshooting)** troubleshooting section for Telegram-specific issues, including:
+
+- "Forbidden: bot can't initiate conversation with a user"
+- "Unauthorized" or token errors
+- No messages received
 
 ### Not finding jobs?
 
@@ -134,6 +93,23 @@ You should see:
 
 ```bash
 pip install --upgrade -r requirements.txt
+```
+
+## Keep It Running 24/7 (Optional)
+
+### On Mac with `screen`:
+
+```bash
+source venv/bin/activate
+screen -S seek_alert python seek_job_alert.py
+# Press Ctrl+A then D to detach
+# Use "screen -r seek_alert" to reattach
+```
+
+### On Mac with `nohup`:
+
+```bash
+nohup python seek_job_alert.py > seek_alert.log 2>&1 &
 ```
 
 ## Logs
@@ -148,18 +124,3 @@ pip install --upgrade -r requirements.txt
 - `seen_jobs.json` - Tracks seen job IDs (auto-generated)
 - `job_alert.log` - Log file (auto-generated)
 - `README.md` - This file
-
-## Notes
-
-- The bot uses web scraping (BeautifulSoup) - not an official API
-- Seek.com.au's HTML structure may change; if no jobs are found, check selectors
-- The bot respects rate limits by checking every 10 minutes
-- Seen jobs are permanently tracked to avoid duplicate alerts
-
-## Next Steps (Optional Enhancements)
-
-- [ ] Add database storage instead of JSON
-- [ ] Create dashboard to view job history
-- [ ] Add filtering by keywords in job description
-- [ ] Deploy to cloud (AWS Lambda, DigitalOcean, etc.)
-- [ ] Add job statistics and analytics

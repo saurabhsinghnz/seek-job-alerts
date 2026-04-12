@@ -232,12 +232,11 @@ class SeekJobScraper:
     def _format_telegram_message(self, job: dict) -> str:
         """Format job details for Telegram message"""
         message = (
-            f"🔔 *New TypeScript Job Alert!*\n\n"
+            f"🔔 *New Job Alert!*\n\n"
             f"📌 *{job['title']}*\n"
             f"🏢 Company: {job['company']}\n"
             f"💰 Salary: {job['salary']}\n"
-            f"📍 Location: {job['location']}\n"
-            f"📅 Posted: {job['posted_date']}\n\n"
+            f"📍 Location: {job['location']}\n\n"
             f"🔗 [View Job]({job['link']})"
         )
         return message

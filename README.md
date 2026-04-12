@@ -1,9 +1,10 @@
 # Seek.com.au Job Alert Bot
 
-Automated Python bot that monitors Seek.com.au for new TypeScript IT jobs (remote, $150K+) and sends Telegram notifications every 10 minutes.
+Automated Python bot that monitors Seek.com.au for new job listings and sends Telegram notifications every 10 minutes.
 
 ## Features
 
+✅ **Multiple search URLs** - Monitor multiple job searches simultaneously  
 ✅ Continuous monitoring of Seek.com.au job listings  
 ✅ Automatic new job detection using local JSON tracking  
 ✅ Real-time Telegram notifications  
@@ -53,7 +54,38 @@ export SEEK_TELEGRAM_TOKEN="your_bot_token_here"
 export SEEK_CHAT_ID="your_chat_id_here"
 ```
 
-### 5. Run the Bot
+### 5. Configure Search URLs
+
+Edit `search_config.json` to add the job search URLs you want to monitor:
+
+```json
+{
+  "searches": [
+    {
+      "name": "TypeScript IT Full Time Remote",
+      "url": "https://www.seek.com.au/typescript-jobs-in-information-communication-technology/full-time/remote?salaryrange=150000-&salarytype=annual&sortmode=ListedDate"
+    },
+    {
+      "name": "Python Data Science Remote",
+      "url": "https://www.seek.com.au/python-jobs-data-science/remote?sortmode=ListedDate"
+    }
+  ]
+}
+```
+
+**To add more searches:**
+
+1. Open `search_config.json`
+2. Add a new object to the `searches` array with `name` and `url` fields
+3. The bot will monitor all configured searches and send notifications for all new jobs
+
+**Tips for creating search URLs:**
+
+- Navigate to Seek.com.au and filter your desired jobs
+- Copy the URL from the address bar
+- Each search should have a unique descriptive name
+
+### 6. Run the Bot
 
 ```bash
 ./run.sh
@@ -120,6 +152,7 @@ nohup python seek_job_alert.py > seek_alert.log 2>&1 &
 ## Files in Project
 
 - `seek_job_alert.py` - Main bot script
+- `search_config.json` - Search URLs configuration (edit this to add/remove searches)
 - `requirements.txt` - Python dependencies
 - `seen_jobs.json` - Tracks seen job IDs (auto-generated)
 - `job_alert.log` - Log file (auto-generated)

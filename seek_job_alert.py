@@ -28,7 +28,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Configuration
-SEEK_URL = "https://www.seek.com.au/typescript-jobs-in-information-communication-technology/full-time/remote?salaryrange=150000-&salarytype=annual&sortmode=ListedDate"
+SEARCH_CONFIG_FILE = "search_config.json"
 SEEN_JOBS_FILE = "seen_jobs.json"
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
 
@@ -40,6 +40,23 @@ class SeekJobScraper:
         self.chat_id = chat_id
         self.telegram_api_url = f"https://api.telegram.org/bot{telegram_token}/sendMessage"
         self.seen_jobs = self._load_seen_jobs()
+        self.search_urls = self._load_search_urls()
+    
+    def _load_search_urls(self) -> list:
+        """Load search URLs from configuration file"""
+        if Path(SEARCH_CONFIG_FILE).exists():
+            try:
+                with open(SEARCH_CONFIG_FILE, 'r') as f:
+                    config = json.load(f)
+                    searches = config.get('searches', [])
+                    if searches:
+                        logger.info(f"Loaded {len(searches)} search configuration(s)")
+                        return searches
+            except Exception as e:
+                logger.error(f"Error loading search config: {e}")
+        
+        logger.warning(f"No search configurations found in {SEARCH_CONFIG_FILE}")
+        return []
     
     def _load_seen_jobs(self) -> set:
         """Load previously seen job IDs from JSON file"""
@@ -147,7 +164,7 @@ class SeekJobScraper:
         
         return jobs
     
-    def scrape_jobs(self) -> list:
+    def scrape_jobs(self, seek_url: str) -> list:
         """Scrape jobs from Seek.com.au using Playwright"""
         try:
             logger.info("Launching browser and fetching jobs...")
@@ -161,7 +178,7 @@ class SeekJobScraper:
                 try:
                     # Load the seek page
                     logger.info(f"Loading page...")
-                    page.goto(SEEK_URL, wait_until='domcontentloaded', timeout=30000)
+                    page.goto(seek_url, wait_until='domcontentloaded', timeout=30000)
                     
                     # Wait a bit for content to load (but not indefinitely)
                     import time
@@ -222,23 +239,42 @@ class SeekJobScraper:
         logger.info(f"Job check started at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         logger.info(f"{'='*60}")
         
-        jobs = self.scrape_jobs()
-        new_jobs = []
+        if not self.search_urls:
+            logger.error("No search URLs configured. Please add searches to search_config.json")
+            return
         
-        for job in jobs:
-            if job['id'] not in self.seen_jobs:
-                new_jobs.append(job)
-                self.seen_jobs.add(job['id'])
+        total_new_jobs = 0
         
-        if new_jobs:
-            logger.info(f"Found {len(new_jobs)} new job(s)")
-            for job in new_jobs:
-                self.send_telegram_notification(job)
-        else:
-            logger.info("No new jobs found")
+        for search in self.search_urls:
+            search_name = search.get('name', 'Unknown')
+            search_url = search.get('url', '')
+            
+            if not search_url:
+                logger.warning(f"Skipping search '{search_name}' - no URL provided")
+                continue
+            
+            logger.info(f"\n--- Checking search: {search_name} ---")
+            
+            jobs = self.scrape_jobs(search_url)
+            new_jobs = []
+            
+            for job in jobs:
+                if job['id'] not in self.seen_jobs:
+                    new_jobs.append(job)
+                    self.seen_jobs.add(job['id'])
+            
+            if new_jobs:
+                logger.info(f"Found {len(new_jobs)} new job(s) in '{search_name}'")
+                total_new_jobs += len(new_jobs)
+                for job in new_jobs:
+                    self.send_telegram_notification(job)
+            else:
+                logger.info(f"No new jobs found in '{search_name}'")
         
         self._save_seen_jobs()
-        logger.info(f"Job check completed. Total seen jobs: {len(self.seen_jobs)}")
+        logger.info(f"\n{'='*60}")
+        logger.info(f"Job check completed. {total_new_jobs} new job(s) total. Total seen jobs: {len(self.seen_jobs)}")
+        logger.info(f"{'='*60}")
     
     def start_scheduler(self, check_interval_minutes: int = 10):
         """Start background scheduler for periodic job checks"""

@@ -1,0 +1,7 @@
+.env
+.env.local
+venv/
+seek-scraper/
+__pycache__/
+*.pyc
+.DS_Store

@@ -8,7 +8,7 @@ import json
 import logging
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import requests
@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 # Configuration
 SEARCH_CONFIG_FILE = "search_config.json"
 SEEN_JOBS_FILE = "seen_jobs.json"
+JOB_RETENTION_DAYS = 90  # Remove job IDs older than this many days
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
 
 class SeekJobScraper:
@@ -58,25 +59,54 @@ class SeekJobScraper:
         logger.warning(f"No search configurations found in {SEARCH_CONFIG_FILE}")
         return []
     
-    def _load_seen_jobs(self) -> set:
-        """Load previously seen job IDs from JSON file"""
+    def _load_seen_jobs(self) -> dict:
+        """Load previously seen job IDs with timestamps from JSON file.
+        Handles migration from old list format to new dict format."""
         if Path(SEEN_JOBS_FILE).exists():
             try:
                 with open(SEEN_JOBS_FILE, 'r') as f:
                     data = json.load(f)
-                    return set(data.get('seen_job_ids', []))
+                    
+                    # Handle new format (dict with timestamps)
+                    if 'seen_jobs' in data and isinstance(data['seen_jobs'], dict):
+                        return data['seen_jobs']
+                    
+                    # Handle old format (list) and migrate to new format
+                    elif 'seen_job_ids' in data and isinstance(data['seen_job_ids'], list):
+                        logger.info("Migrating seen_jobs from list to dict format with timestamps")
+                        migrated = {}
+                        for job_id in data['seen_job_ids']:
+                            # Use current time as migration timestamp
+                            migrated[job_id] = datetime.now().isoformat()
+                        return migrated
             except Exception as e:
                 logger.error(f"Error loading seen jobs: {e}")
-                return set()
-        return set()
+        return {}
     
     def _save_seen_jobs(self):
-        """Save seen job IDs to JSON file"""
+        """Save seen job IDs with timestamps to JSON file"""
         try:
             with open(SEEN_JOBS_FILE, 'w') as f:
-                json.dump({'seen_job_ids': list(self.seen_jobs)}, f, indent=2)
+                json.dump({'seen_jobs': self.seen_jobs}, f, indent=2)
         except Exception as e:
             logger.error(f"Error saving seen jobs: {e}")
+    
+    def _cleanup_old_jobs(self, retention_days: int = JOB_RETENTION_DAYS):
+        """Remove job IDs older than retention_days to keep the list manageable"""
+        cutoff_date = datetime.now() - timedelta(days=retention_days)
+        jobs_before = len(self.seen_jobs)
+        
+        # Filter out jobs older than cutoff date
+        self.seen_jobs = {
+            job_id: timestamp for job_id, timestamp in self.seen_jobs.items()
+            if datetime.fromisoformat(timestamp) > cutoff_date
+        }
+        
+        jobs_after = len(self.seen_jobs)
+        if jobs_before > jobs_after:
+            removed = jobs_before - jobs_after
+            logger.info(f"🗑️  Cleaned up {removed} old job(s) ({retention_days}+ days). "
+                        f"Retained {jobs_after} job(s).")
     
     def _extract_job_id(self, job_link: str) -> str:
         """Extract job ID from job link"""
@@ -261,7 +291,7 @@ class SeekJobScraper:
             for job in jobs:
                 if job['id'] not in self.seen_jobs:
                     new_jobs.append(job)
-                    self.seen_jobs.add(job['id'])
+                    self.seen_jobs[job['id']] = datetime.now().isoformat()
             
             if new_jobs:
                 logger.info(f"Found {len(new_jobs)} new job(s) in '{search_name}'")
@@ -271,7 +301,10 @@ class SeekJobScraper:
             else:
                 logger.info(f"No new jobs found in '{search_name}'")
         
+        # Clean up old job entries before saving
+        self._cleanup_old_jobs()
         self._save_seen_jobs()
+        
         logger.info(f"\n{'='*60}")
         logger.info(f"Job check completed. {total_new_jobs} new job(s) total. Total seen jobs: {len(self.seen_jobs)}")
         logger.info(f"{'='*60}")

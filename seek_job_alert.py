@@ -44,13 +44,19 @@ class SeekJobScraper:
         self.search_urls = self._load_search_urls()
     
     def _load_search_urls(self) -> list:
-        """Load search URLs from configuration file"""
+        """Load search URLs from configuration file and ensure sort parameter is present"""
         if Path(SEARCH_CONFIG_FILE).exists():
             try:
                 with open(SEARCH_CONFIG_FILE, 'r') as f:
                     config = json.load(f)
                     searches = config.get('searches', [])
                     if searches:
+                        # Ensure each URL has the sort parameter
+                        for search in searches:
+                            url = search.get('url', '')
+                            if url and '&sortmode=ListedDate' not in url:
+                                search['url'] = url.rstrip('&') + '&sortmode=ListedDate'
+                        
                         logger.info(f"Loaded {len(searches)} search configuration(s)")
                         return searches
             except Exception as e:
@@ -286,11 +292,18 @@ class SeekJobScraper:
             
             jobs = self.scrape_jobs(search_url)
             new_jobs = []
+            already_scanned_count = 0
             
             for job in jobs:
                 if job['id'] not in self.seen_jobs:
                     new_jobs.append(job)
                     self.seen_jobs[job['id']] = datetime.now().isoformat()
+                else:
+                    # Jobs are sorted by date (newest first)
+                    # Once we hit an already-scanned job, all remaining jobs are old
+                    already_scanned_count = len(jobs) - len(new_jobs) - 1
+                    logger.info(f"Encountered already-scanned job. Stopping scan (skipped {already_scanned_count} older jobs)")
+                    break
             
             if new_jobs:
                 logger.info(f"Found {len(new_jobs)} new job(s) in '{search_name}'")

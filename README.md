@@ -91,6 +91,12 @@ Edit `search_config.json` to add the job search URLs you want to monitor:
 ./run.sh
 ```
 
+## Run Tests
+
+```bash
+./seek-scraper/bin/python -m unittest discover -s tests -p 'test_*.py'
+```
+
 Expected output:
 
 ```

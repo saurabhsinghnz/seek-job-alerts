@@ -121,6 +121,11 @@ See the **[TELEGRAM_SETUP.md](TELEGRAM_SETUP.md#troubleshooting)** troubleshooti
 - Check website HTML structure hasn't changed (may need to update selectors)
 - Ensure you have internet connection
 
+When a page is blocked or malformed, the scraper records its classification,
+URL, title, response status, and detected indicators. To additionally save
+local HTML and screenshots for investigation, set `SEEK_DIAGNOSTIC_DIR` to an
+output directory before starting the bot. The default is metadata-only.
+
 ### Syntax/Import errors?
 
 ```bash

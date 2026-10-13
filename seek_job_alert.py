@@ -4,17 +4,21 @@ Seek.com.au Job Alert Bot
 Monitors Seek for TypeScript IT jobs and sends Telegram notifications
 """
 
-import json
 import logging
 import os
+import re
 import time
-from datetime import datetime, timedelta
-from pathlib import Path
 
 import requests
 from apscheduler.schedulers.background import BackgroundScheduler
 from playwright.sync_api import sync_playwright
-import re
+
+from models import ScrapeResult
+from notifications import format_telegram_message, send_telegram_notification
+from scraper import BrowserScraper
+from config import SearchConfig
+from service import JobAlertService
+from state import SeenJobState
 
 # Configure logging
 logging.basicConfig(
@@ -27,11 +31,27 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
+def load_runtime_config() -> dict:
+    """Load and validate runtime settings from environment variables."""
+    telegram_token = os.getenv('SEEK_TELEGRAM_TOKEN')
+    chat_id = os.getenv('SEEK_CHAT_ID')
+
+    if not telegram_token or not chat_id:
+        logger.error("Error: SEEK_TELEGRAM_TOKEN and SEEK_CHAT_ID environment variables are required")
+        raise ValueError("Missing required environment variables")
+
+    return {
+        "telegram_token": telegram_token,
+        "chat_id": chat_id,
+        "check_interval": int(os.getenv('SEEK_CHECK_INTERVAL', '10')),
+    }
+
+
 # Configuration
 SEARCH_CONFIG_FILE = "search_config.json"
 SEEN_JOBS_FILE = "seen_jobs.json"
 JOB_RETENTION_DAYS = 90  # Remove job IDs older than this many days
-USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
 
 class SeekJobScraper:
     """Handles scraping jobs from Seek.com.au using Playwright"""
@@ -42,72 +62,28 @@ class SeekJobScraper:
         self.telegram_api_url = f"https://api.telegram.org/bot{telegram_token}/sendMessage"
         self.seen_jobs = self._load_seen_jobs()
         self.search_urls = self._load_search_urls()
+        self.last_page_diagnostic = None
     
     def _load_search_urls(self) -> list:
         """Load search URLs from configuration file and ensure sort parameter is present"""
-        if Path(SEARCH_CONFIG_FILE).exists():
-            try:
-                with open(SEARCH_CONFIG_FILE, 'r') as f:
-                    config = json.load(f)
-                    searches = config.get('searches', [])
-                    if searches:
-                        # Ensure each URL has the sort parameter
-                        for search in searches:
-                            url = search.get('url', '')
-                            if url and '&sortmode=ListedDate' not in url:
-                                search['url'] = url.rstrip('&') + '&sortmode=ListedDate'
-                        
-                        logger.info(f"Loaded {len(searches)} search configuration(s)")
-                        return searches
-            except Exception as e:
-                logger.error(f"Error loading search config: {e}")
-        
-        logger.warning(f"No search configurations found in {SEARCH_CONFIG_FILE}")
-        return []
+        return SearchConfig(SEARCH_CONFIG_FILE).load()
     
     def _load_seen_jobs(self) -> dict:
         """Load previously seen job IDs with timestamps from JSON file.
         Handles migration from old list format to new dict format."""
-        if Path(SEEN_JOBS_FILE).exists():
-            try:
-                with open(SEEN_JOBS_FILE, 'r') as f:
-                    data = json.load(f)
-                    
-                    # Handle new format (dict with timestamps)
-                    if 'seen_jobs' in data and isinstance(data['seen_jobs'], dict):
-                        return data['seen_jobs']
-                    
-                    # Handle old format (list) and migrate to new format
-                    elif 'seen_job_ids' in data and isinstance(data['seen_job_ids'], list):
-                        logger.info("Migrating seen_jobs from list to dict format with timestamps")
-                        migrated = {}
-                        for job_id in data['seen_job_ids']:
-                            # Use current time as migration timestamp
-                            migrated[job_id] = datetime.now().isoformat()
-                        return migrated
-            except Exception as e:
-                logger.error(f"Error loading seen jobs: {e}")
-        return {}
+        return SeenJobState(SEEN_JOBS_FILE).load()
     
     def _save_seen_jobs(self):
         """Save seen job IDs with timestamps to JSON file"""
-        try:
-            with open(SEEN_JOBS_FILE, 'w') as f:
-                json.dump({'seen_jobs': self.seen_jobs}, f, indent=2)
-        except Exception as e:
-            logger.error(f"Error saving seen jobs: {e}")
+        SeenJobState(SEEN_JOBS_FILE).save(self.seen_jobs)
     
     def _cleanup_old_jobs(self, retention_days: int = JOB_RETENTION_DAYS):
         """Remove job IDs older than retention_days to keep the list manageable"""
-        cutoff_date = datetime.now() - timedelta(days=retention_days)
         jobs_before = len(self.seen_jobs)
-        
-        # Filter out jobs older than cutoff date
-        self.seen_jobs = {
-            job_id: timestamp for job_id, timestamp in self.seen_jobs.items()
-            if datetime.fromisoformat(timestamp) > cutoff_date
-        }
-        
+        self.seen_jobs = SeenJobState(SEEN_JOBS_FILE).cleanup(
+            self.seen_jobs,
+            retention_days=retention_days,
+        )
         jobs_after = len(self.seen_jobs)
         if jobs_before > jobs_after:
             removed = jobs_before - jobs_after
@@ -124,202 +100,83 @@ class SeekJobScraper:
             return str(hash(job_link))
         except Exception:
             return str(hash(job_link))
-    
-    def _parse_jobs_from_page(self, page) -> list:
-        """Parse job listings from the rendered page"""
-        jobs = []
-        
-        try:
-            # Wait for job listings to load
-            page.wait_for_selector('[data-job-id]', timeout=10000)
-            logger.info("Found job listings on page")
-        except Exception as e:
-            logger.warning(f"Timeout waiting for job listings: {e}")
-        
-        try:
-            # Extract all job elements with data attributes
-            job_locator = page.locator('[data-job-id]')
-            job_count = job_locator.count()
-            logger.info(f"Found {job_count} job elements")
-            logger.info(f"Starting to parse {min(job_count, 50)} jobs...")
-            
-            # Extract all job data at once using JavaScript for efficiency
-            jobs_data = page.evaluate("""
-                () => {
-                    const jobElements = document.querySelectorAll('[data-job-id]');
-                    const jobs = [];
-                    jobElements.forEach((el, idx) => {
-                        if (idx >= 50) return;  // Limit to 50
-                        try {
-                            const jobId = el.getAttribute('data-job-id');
-                            const titleElem = el.querySelector('[data-automation="jobTitle"]');
-                            const companyElem = el.querySelector('[data-automation="jobCompany"]');
-                            const locationElem = el.querySelector('[data-automation="jobLocation"]');
-                            const salaryElem = el.querySelector('[data-automation="jobSalary"]');
-                            const dateElem = el.querySelector('[data-automation="jobListedDate"]');
-                            const linkElem = el.querySelector('a[href*="/job/"]');
-                            
-                            jobs.push({
-                                id: jobId,
-                                title: titleElem ? titleElem.textContent.trim() : 'N/A',
-                                company: companyElem ? companyElem.textContent.trim() : 'N/A',
-                                location: locationElem ? locationElem.textContent.trim() : 'Remote',
-                                salary: salaryElem ? salaryElem.textContent.trim() : 'Not specified',
-                                date: dateElem ? dateElem.textContent.trim() : 'Recently',
-                                link: linkElem ? linkElem.href : ''
-                            });
-                        } catch (e) {
-                            console.error('Error parsing job:', e);
-                        }
-                    });
-                    return jobs;
-                }
-            """)
-            
-            logger.info(f"Extracted {len(jobs_data)} jobs via JavaScript")
-            
-            # Convert to our job format
-            for job_data in jobs_data:
-                if job_data['title'] and job_data['title'] != 'N/A' and job_data['id']:
-                    jobs.append({
-                        'id': job_data['id'],
-                        'title': job_data['title'],
-                        'company': job_data['company'],
-                        'salary': job_data['salary'],
-                        'location': job_data['location'],
-                        'posted_date': job_data['date'],
-                        'link': job_data['link']
-                    })
-            
-            logger.info(f"Successfully parsed {len(jobs)} jobs")
-            
-        except Exception as e:
-            logger.error(f"Error parsing jobs from page: {e}")
-            import traceback
-            traceback.print_exc()
-        
-        return jobs
-    
-    def scrape_jobs(self, seek_url: str) -> list:
-        """Scrape jobs from Seek.com.au using Playwright"""
-        try:
-            logger.info("Launching browser and fetching jobs...")
-            
-            with sync_playwright() as p:
-                # Launch browser in headless mode
-                browser = p.chromium.launch(headless=True)
-                context = browser.new_context(user_agent=USER_AGENT)
-                page = context.new_page()
-                
-                try:
-                    # Load the seek page
-                    logger.info(f"Loading page...")
-                    page.goto(seek_url, wait_until='domcontentloaded', timeout=30000)
-                    
-                    # Wait a bit for content to load (but not indefinitely)
-                    import time
-                    time.sleep(3)
-                    
-                    # Parse jobs from the page
-                    jobs = self._parse_jobs_from_page(page)
-                    
-                    return jobs
-                    
-                finally:
-                    context.close()
-                    browser.close()
-                    
-        except Exception as e:
-            logger.error(f"Error during scraping: {e}")
-            import traceback
-            traceback.print_exc()
-            return []
+
+    def _browser_scraper(self):
+        scraper = BrowserScraper(playwright_factory=sync_playwright)
+        scraper.last_page_diagnostic = getattr(self, 'last_page_diagnostic', None)
+        return scraper
+
+    def _delegate_browser_method(self, method_name, *args, **kwargs):
+        scraper = self._browser_scraper()
+        result = getattr(scraper, method_name)(*args, **kwargs)
+        self.last_page_diagnostic = scraper.last_page_diagnostic
+        return result
+
+    def _record_page_diagnostic(self, page, response_status=None, navigation_error=None):
+        return self._delegate_browser_method(
+            '_record_page_diagnostic',
+            page,
+            response_status=response_status,
+            navigation_error=navigation_error,
+        )
+
+    def _parse_jobs_from_html(self, html: str, base_url: str = '', response_status=None, title=None) -> list:
+        return self._delegate_browser_method(
+            '_parse_jobs_from_html',
+            html,
+            base_url=base_url,
+            response_status=response_status,
+            title=title,
+        )
+
+    def _prefer_stronger_diagnostic(self, browser_diagnostic, static_diagnostic):
+        return self._delegate_browser_method(
+            '_prefer_stronger_diagnostic', browser_diagnostic, static_diagnostic
+        )
+
+    def _parse_jobs_from_page(self, page, response_status=None) -> list:
+        return self._delegate_browser_method(
+            '_parse_jobs_from_page', page, response_status=response_status
+        )
+
+    def _wait_for_page_readiness(self, page):
+        return self._delegate_browser_method('_wait_for_page_readiness', page)
+
+    def _capture_page_artifacts(self, page, diagnostic):
+        return self._delegate_browser_method(
+            '_capture_page_artifacts', page, diagnostic
+        )
+
+    def scrape_jobs(self, seek_url: str) -> ScrapeResult:
+        scraper = self._browser_scraper()
+        result = scraper.scrape_jobs(seek_url)
+        self.last_page_diagnostic = scraper.last_page_diagnostic
+        return result
     
     def _format_telegram_message(self, job: dict) -> str:
         """Format job details for Telegram message"""
-        message = (
-            f"🔔 *New Job Alert!*\n\n"
-            f"📌 *{job['title']}*\n"
-            f"🏢 Company: {job['company']}\n"
-            f"💰 Salary: {job['salary']}\n"
-            f"📍 Location: {job['location']}\n\n"
-            f"🔗 [View Job]({job['link']})"
-        )
-        return message
+        return format_telegram_message(job)
     
     def send_telegram_notification(self, job: dict):
         """Send job notification via Telegram using HTTP API"""
-        try:
-            message = self._format_telegram_message(job)
-            
-            payload = {
-                'chat_id': self.chat_id,
-                'text': message,
-                'parse_mode': 'Markdown'
-            }
-            
-            response = requests.post(self.telegram_api_url, json=payload, timeout=10)
-            
-            if response.status_code == 200:
-                logger.info(f"✓ Telegram notification sent for job: {job['title']}")
-            else:
-                logger.error(f"✗ Telegram API error ({response.status_code}): {response.text}")
-                
-        except Exception as e:
-            logger.error(f"✗ Error sending Telegram notification: {e}")
+        send_telegram_notification(
+            job,
+            chat_id=self.chat_id,
+            telegram_api_url=self.telegram_api_url,
+            request_post=requests.post,
+        )
     
     def check_and_notify(self):
         """Main job checking and notification routine"""
-        logger.info(f"\n{'='*60}")
-        logger.info(f"Job check started at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        logger.info(f"{'='*60}")
-        
-        if not self.search_urls:
-            logger.error("No search URLs configured. Please add searches to search_config.json")
-            return
-        
-        total_new_jobs = 0
-        
-        for search in self.search_urls:
-            search_name = search.get('name', 'Unknown')
-            search_url = search.get('url', '')
-            
-            if not search_url:
-                logger.warning(f"Skipping search '{search_name}' - no URL provided")
-                continue
-            
-            logger.info(f"\n--- Checking search: {search_name} ---")
-            
-            jobs = self.scrape_jobs(search_url)
-            new_jobs = []
-            already_scanned_count = 0
-            
-            for job in jobs:
-                if job['id'] not in self.seen_jobs:
-                    new_jobs.append(job)
-                    self.seen_jobs[job['id']] = datetime.now().isoformat()
-                else:
-                    # Jobs are sorted by date (newest first)
-                    # Once we hit an already-scanned job, all remaining jobs are old
-                    already_scanned_count = len(jobs) - len(new_jobs) - 1
-                    logger.info(f"Encountered already-scanned job. Stopping scan (skipped {already_scanned_count} older jobs)")
-                    break
-            
-            if new_jobs:
-                logger.info(f"Found {len(new_jobs)} new job(s) in '{search_name}'")
-                total_new_jobs += len(new_jobs)
-                for job in new_jobs:
-                    self.send_telegram_notification(job)
-            else:
-                logger.info(f"No new jobs found in '{search_name}'")
-        
-        # Clean up old job entries before saving
-        self._cleanup_old_jobs()
-        self._save_seen_jobs()
-        
-        logger.info(f"\n{'='*60}")
-        logger.info(f"Job check completed. {total_new_jobs} new job(s) total. Total seen jobs: {len(self.seen_jobs)}")
-        logger.info(f"{'='*60}")
+        JobAlertService(
+            searches=self.search_urls,
+            seen_jobs=self.seen_jobs,
+            get_seen_jobs=lambda: self.seen_jobs,
+            scrape_jobs=self.scrape_jobs,
+            notify=self.send_telegram_notification,
+            cleanup_seen_jobs=self._cleanup_old_jobs,
+            save_seen_jobs=self._save_seen_jobs,
+        ).check_and_notify()
     
     def start_scheduler(self, check_interval_minutes: int = 10):
         """Start background scheduler for periodic job checks"""
@@ -342,18 +199,16 @@ class SeekJobScraper:
 
 def main():
     """Main entry point"""
-    # Get configuration from environment variables
-    telegram_token = os.getenv('SEEK_TELEGRAM_TOKEN')
-    chat_id = os.getenv('SEEK_CHAT_ID')
-    check_interval = int(os.getenv('SEEK_CHECK_INTERVAL', '10'))
-    
-    if not telegram_token or not chat_id:
-        logger.error("Error: SEEK_TELEGRAM_TOKEN and SEEK_CHAT_ID environment variables are required")
-        raise ValueError("Missing required environment variables")
+    runtime_config = load_runtime_config()
     
     # Initialize scraper and start scheduler
-    scraper = SeekJobScraper(telegram_token, chat_id)
-    scheduler = scraper.start_scheduler(check_interval_minutes=check_interval)
+    scraper = SeekJobScraper(
+        runtime_config["telegram_token"],
+        runtime_config["chat_id"],
+    )
+    scheduler = scraper.start_scheduler(
+        check_interval_minutes=runtime_config["check_interval"]
+    )
     
     try:
         # Run the first check immediately, then wait for scheduled checks
@@ -366,6 +221,7 @@ def main():
             time.sleep(1)
     except KeyboardInterrupt:
         logger.info("Shutting down scheduler...")
+    finally:
         scheduler.shutdown()
         logger.info("Job alert bot stopped")
 

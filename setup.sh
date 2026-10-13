@@ -34,6 +34,11 @@ echo "📚 Installing dependencies..."
 pip install -q -r requirements.txt
 echo "✅ Dependencies installed"
 
+# Install the browser required by Playwright
+echo "🌐 Installing Playwright Chromium..."
+python -m playwright install chromium
+echo "✅ Playwright Chromium installed"
+
 # Create .env file if it doesn't exist
 if [ ! -f ".env" ]; then
     echo ""

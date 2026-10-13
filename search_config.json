@@ -1,12 +1,12 @@
 {
   "searches": [
     {
-      "name": "IT Full Time Remote",
-      "url": "https://www.seek.com.au/jobs-in-information-communication-technology/full-time/remote?salaryrange=150000-&salarytype=annual&sortmode=ListedDate"
+      "name": "IT Remote",
+      "url": "https://au.seek.com/jobs-in-information-communication-technology/remote?sortmode=ListedDate"
     },
     {
-      "name": "Perth Hybrid IT Full Time",
-      "url": "https://www.seek.com.au/jobs-in-information-communication-technology/in-Perth-WA-6000/full-time/hybrid?salaryrange=150000-&salarytype=annual&sortmode=ListedDate"
+      "name": "IT Perth",
+      "url": "https://au.seek.com/jobs-in-information-communication-technology/in-Perth-WA-6000?sortmode=ListedDate"
     }
   ]
 }

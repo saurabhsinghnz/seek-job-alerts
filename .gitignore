@@ -1,6 +1,6 @@
 .env
 .env.local
-venv/
+.venv/
 seek-scraper/
 __pycache__/
 *.pyc

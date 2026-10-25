@@ -12,19 +12,25 @@ if [ -f "$SCRIPT_DIR/.env" ]; then
 	set +o allexport
 fi
 
-# Use the standard setup environment first, then the checked-in project
-# environment used by this workspace.
-if [ -x "$SCRIPT_DIR/venv/bin/python" ]; then
-	PYTHON_BIN="$SCRIPT_DIR/venv/bin/python"
-elif [ -x "$SCRIPT_DIR/seek-scraper/bin/python" ]; then
-	PYTHON_BIN="$SCRIPT_DIR/seek-scraper/bin/python"
-else
-	PYTHON_BIN="$(command -v python3 || command -v python)"
-fi
+PYTHON_BIN=""
+for candidate in \
+	"$SCRIPT_DIR/.venv/bin/python" \
+	"$SCRIPT_DIR/venv/bin/python" \
+	"$SCRIPT_DIR/seek-scraper/bin/python" \
+	"$(command -v python3 2>/dev/null || command -v python 2>/dev/null)"; do
+	if [ -z "$candidate" ] || [ ! -x "$candidate" ]; then
+		continue
+	fi
+	if "$candidate" -c 'import subprocess, sys; subprocess.run([sys.executable, "-c", "pass"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)' >/dev/null 2>&1 \
+		&& "$candidate" -c 'import playwright' >/dev/null 2>&1; then
+		PYTHON_BIN="$candidate"
+		break
+	fi
+done
 
-if [ -z "$PYTHON_BIN" ] || ! "$PYTHON_BIN" -c 'import playwright' >/dev/null 2>&1; then
-	echo "Playwright is not installed in the selected Python environment." >&2
-	echo "Run ./setup.sh or install requirements.txt in the active environment." >&2
+if [ -z "$PYTHON_BIN" ]; then
+	echo "No usable Python environment with Playwright was found." >&2
+	echo "Run ./setup.sh to create one with a Python runtime that supports subprocesses." >&2
 	exit 1
 fi
 

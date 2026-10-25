@@ -6,37 +6,63 @@ set -e
 echo "🚀 Setting up Seek Job Alert Bot..."
 echo ""
 
-# Check Python version
-if ! command -v python3 &> /dev/null; then
-    echo "❌ Python 3 is not installed"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
+python_works_with_subprocesses() {
+    if [ -z "$PYTHON_BIN" ]; then
+        "$1" -c 'import subprocess, sys; subprocess.run([sys.executable, "-c", "pass"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)' >/dev/null 2>&1
+        return
+    fi
+    "$PYTHON_BIN" -c 'import subprocess, sys; probe = """import subprocess, sys; subprocess.run([sys.executable, "-c", "pass"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)"""; result = subprocess.run([sys.argv[1], "-c", probe], stdout=subprocess.PIPE, stderr=subprocess.PIPE); sys.exit(result.returncode != 0)' "$1" >/dev/null 2>&1
+}
+
+# Prefer Homebrew Python, then PATH/system Python, while rejecting broken runtimes.
+PYTHON_BIN=""
+for candidate in /opt/homebrew/bin/python3 "$(command -v python3 2>/dev/null)" /usr/bin/python3; do
+    if [ -n "$candidate" ] && [ -x "$candidate" ] && python_works_with_subprocesses "$candidate"; then
+        PYTHON_BIN="$candidate"
+        break
+    fi
+done
+
+if [ -z "$PYTHON_BIN" ]; then
+    echo "❌ No Python 3 interpreter with working subprocess support was found" >&2
     exit 1
 fi
 
-echo "✅ Python $(python3 --version) found"
+echo "✅ Using $($PYTHON_BIN --version 2>&1)"
 echo ""
 
-# Create virtual environment
-if [ ! -d "venv" ]; then
-    echo "📦 Creating virtual environment..."
-    python3 -m venv venv
-    echo "✅ Virtual environment created"
-else
-    echo "✅ Virtual environment already exists"
+# Keep a broken existing venv intact and build a replacement alongside it.
+VENV_DIR="venv"
+if [ -x "$VENV_DIR/bin/python" ] && ! python_works_with_subprocesses "$VENV_DIR/bin/python"; then
+    VENV_DIR=".venv"
+    echo "⚠️  Existing venv cannot launch subprocesses; using .venv instead"
 fi
 
-# Activate virtual environment
-echo ""
-echo "🔧 Activating virtual environment..."
-source venv/bin/activate
+if [ -x "$VENV_DIR/bin/python" ]; then
+    if ! python_works_with_subprocesses "$VENV_DIR/bin/python"; then
+        echo "❌ $VENV_DIR also has a broken Python runtime; move it aside and rerun ./setup.sh" >&2
+        exit 1
+    fi
+    echo "✅ Virtual environment already exists: $VENV_DIR"
+else
+    echo "📦 Creating virtual environment: $VENV_DIR"
+    "$PYTHON_BIN" -m venv "$VENV_DIR"
+fi
+
+VENV_PYTHON="$SCRIPT_DIR/$VENV_DIR/bin/python"
 
 # Install dependencies
+echo ""
 echo "📚 Installing dependencies..."
-pip install -q -r requirements.txt
+"$VENV_PYTHON" -m pip install -q -r requirements.txt
 echo "✅ Dependencies installed"
 
 # Install the browser required by Playwright
 echo "🌐 Installing Playwright Chromium..."
-python -m playwright install chromium
+"$VENV_PYTHON" -m playwright install chromium
 echo "✅ Playwright Chromium installed"
 
 # Create .env file if it doesn't exist
@@ -57,7 +83,6 @@ echo ""
 echo "✅ Setup complete!"
 echo ""
 echo "Next steps:"
-echo "  1. Edit .env with your Telegram credentials"
-echo "  2. Run: source venv/bin/activate"
-echo "  3. Run: python seek_job_alert.py"
+echo "  1. Verify .env has your Telegram credentials"
+echo "  2. Run: ./run.sh"
 echo ""
